@@ -27,6 +27,14 @@ import { ObsidianVaultAdapter } from "./vaultAdapter";
 import { ObsidianNoticeAdapter } from "./noticeAdapter";
 import { ObsidianFrontmatterAdapter } from "./frontmatterAdapter";
 import { PLUGIN_ID } from "@ai-manuscript-studio/core/browser";
+import { QuickComposeModal } from "./QuickComposeModal";
+import { parseStructureNote } from "./structureBridge/parseStructureNote";
+import {
+  createWritingProjectFromHandoff,
+  parseWritingHandoffJson,
+} from "./structureBridge/createWritingProjectFromHandoff";
+
+const WRITING_HANDOFF_JSON_PATH = "_index/writing-handoff.json";
 
 export default class AIManuscriptStudioPlugin extends Plugin {
   settings!: AIManuscriptStudioSettings;
@@ -63,7 +71,7 @@ export default class AIManuscriptStudioPlugin extends Plugin {
     this.addCommand({
       id: "open-studio",
       name: "원고실 열기 (현재 노트의 프로젝트)",
-      checkCallback: (checking) => {
+      checkCallback: (checking: boolean) => {
         const folder = this.activeProjectFolder();
         if (!folder) return false;
         if (!checking) void this.openStudio(folder);
@@ -74,7 +82,7 @@ export default class AIManuscriptStudioPlugin extends Plugin {
     this.addCommand({
       id: "launch-app",
       name: "(레거시) Tauri 데스크톱 앱 호출 — 현재 노트의 프로젝트",
-      checkCallback: (checking) => {
+      checkCallback: (checking: boolean) => {
         const folder = this.activeProjectFolder();
         if (!folder) return false;
         if (!checking) {
@@ -100,7 +108,34 @@ export default class AIManuscriptStudioPlugin extends Plugin {
       callback: () => void this.openNewProjectFlow(),
     });
 
+    this.addCommand({
+      id: "quick-compose-communication",
+      name: "즉석 커뮤니케이션 작성",
+      callback: () => {
+        new QuickComposeModal(this.app, this).open();
+      },
+    });
+
+    this.addCommand({
+      id: "import-active-structure-note",
+      name: "현재 구조노트를 원고 프로젝트로 가져오기",
+      callback: () => void this.importActiveStructureNote(),
+    });
+
+    this.addCommand({
+      id: "import-writing-handoff-json",
+      name: "원고실 handoff JSON 가져오기",
+      callback: () => void this.importWritingHandoffJson(),
+    });
+
     this.addSettingTab(new AIManuscriptStudioSettingTab(this.app, this));
+
+    // Surface the indexer panel as soon as the workspace layout is ready.
+    // Mirrors the Zettel Connect pattern so enabling/reloading the plugin
+    // makes the right-sidebar panel visible without requiring the ribbon/command.
+    this.app.workspace.onLayoutReady(() => {
+      void this.openIndexerOnLayoutReady();
+    });
   }
 
   async onunload(): Promise<void> {
@@ -138,6 +173,13 @@ export default class AIManuscriptStudioPlugin extends Plugin {
     return leaf;
   }
 
+  private async openIndexerOnLayoutReady(): Promise<void> {
+    if (this.app.workspace.getLeavesOfType(PROJECT_INDEXER_VIEW_TYPE).length > 0) {
+      return;
+    }
+    await this.openIndexer();
+  }
+
   private async refreshIndexer(): Promise<void> {
     for (const leaf of this.app.workspace.getLeavesOfType(
       PROJECT_INDEXER_VIEW_TYPE,
@@ -172,6 +214,87 @@ export default class AIManuscriptStudioPlugin extends Plugin {
     if (!ours || !slug) return null;
     const root = this.settings.writingFolder.replace(/\/+$/, "");
     return `${root}/${slug}`;
+  }
+
+  /** W1: 현재 활성 3.Structure 노트를 원고 프로젝트로 가져온다. */
+  private async importActiveStructureNote(): Promise<void> {
+    const file = this.app.workspace.getActiveFile();
+    if (!file) {
+      this.noticeAdapter.warn("열린 파일이 없습니다. 3.Structure 노트를 먼저 열어 주세요.");
+      return;
+    }
+    if (!file.path.startsWith("3.Structure/")) {
+      this.noticeAdapter.warn(
+        `'${file.path}'는 3.Structure 폴더 안의 파일이 아닙니다. 구조노트만 가져올 수 있습니다.`,
+      );
+      return;
+    }
+    let markdown: string;
+    try {
+      markdown = await this.vaultAdapter.readFile(file.path);
+    } catch {
+      this.noticeAdapter.error(`파일을 읽는 중 오류가 발생했습니다: ${file.path}`);
+      return;
+    }
+    let handoff;
+    try {
+      handoff = parseStructureNote(file.path, markdown);
+    } catch (err) {
+      this.noticeAdapter.error(`구조노트 파싱 실패: ${(err as Error).message}`);
+      return;
+    }
+    const writingFolder = this.settings.writingFolder ?? "4.Writing";
+    let result;
+    try {
+      result = await createWritingProjectFromHandoff({
+        vault: this.vaultAdapter,
+        notice: this.noticeAdapter,
+        writingFolder,
+        handoff,
+      });
+    } catch (err) {
+      this.noticeAdapter.error(`프로젝트 생성 실패: ${(err as Error).message}`);
+      return;
+    }
+    await this.refreshIndexer();
+    await this.openStudio(result.folderPath);
+  }
+
+  /** W3: _index/writing-handoff.json handoff contract를 원고 프로젝트로 가져온다. */
+  private async importWritingHandoffJson(): Promise<void> {
+    let raw: string;
+    try {
+      raw = await this.vaultAdapter.readFile(WRITING_HANDOFF_JSON_PATH);
+    } catch {
+      this.noticeAdapter.warn(
+        `handoff JSON을 읽을 수 없습니다: ${WRITING_HANDOFF_JSON_PATH}`,
+      );
+      return;
+    }
+
+    let handoff;
+    try {
+      handoff = parseWritingHandoffJson(raw, WRITING_HANDOFF_JSON_PATH);
+    } catch (err) {
+      this.noticeAdapter.error(`handoff JSON 파싱 실패: ${(err as Error).message}`);
+      return;
+    }
+
+    let result;
+    try {
+      result = await createWritingProjectFromHandoff({
+        vault: this.vaultAdapter,
+        notice: this.noticeAdapter,
+        writingFolder: this.settings.writingFolder ?? "4.Writing",
+        handoff,
+      });
+    } catch (err) {
+      this.noticeAdapter.error(`프로젝트 생성 실패: ${(err as Error).message}`);
+      return;
+    }
+
+    await this.refreshIndexer();
+    await this.openStudio(result.folderPath);
   }
 
   /**

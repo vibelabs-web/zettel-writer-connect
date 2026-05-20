@@ -1,0 +1,19 @@
+{
+  "type": "baseline",
+  "label": "guide-operating-guide-polish-20260520",
+  "root": "/Users/dongchanyoon/Documents/Work/Projects/14.zettel-writer-connect",
+  "created_at": "2026-05-19T15:12:02.762071+00:00",
+  "paths": [
+    "운영가이드.md"
+  ],
+  "records": {
+    "운영가이드.md": {
+      "status": "??",
+      "fingerprint": {
+        "kind": "file",
+        "sha256": "81b259601118e53345b933f3924b7a7bc28663047aa8b8b8584ac48a803a0f95",
+        "size": 8537
+      }
+    }
+  }
+}

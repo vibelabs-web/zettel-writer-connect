@@ -127,28 +127,46 @@ describe("tauriShims/core invoke()", () => {
       expect(p).toBe("/vault/_attachments/voice");
     });
 
-    test("voice_folder_info 는 path + is_default 반환 + 폴더 생성 효과", async () => {
+    test("voice_folder_info 는 path + isCustom + defaultPath 반환 + 폴더 생성 효과", async () => {
       const { adapter } = makePlugin();
-      const info = await invoke<{ path: string; is_default: boolean }>(
-        "voice_folder_info",
-      );
+      const info = await invoke<{
+        path: string;
+        isCustom: boolean;
+        defaultPath: string;
+      }>("voice_folder_info");
       expect(info.path).toBe("/vault/_attachments/voice");
-      expect(info.is_default).toBe(true);
+      expect(info.isCustom).toBe(false);
+      expect(info.defaultPath).toBe("/vault/_attachments/voice");
       expect(await adapter.exists("_attachments/voice")).toBe(true);
     });
 
-    test("voice_write_file 후 voice_list_files 가 해당 파일을 보여준다", async () => {
+    test("voice_write_file 후 voice_list_files 가 해당 파일을 보여준다 (absPath 필드)", async () => {
       makePlugin();
       await invoke("voice_write_file", {
         name: "sample.txt",
         content: "내 문체 학습 자료",
       });
-      const list = await invoke<{ name: string; abs_path: string }[]>(
-        "voice_list_files",
-      );
+      const list = await invoke<{
+        name: string;
+        absPath: string;
+        modifiedMs: number;
+        size: number;
+      }[]>("voice_list_files");
       const f = list.find((e) => e.name === "sample.txt");
       expect(f).toBeTruthy();
-      expect(f!.abs_path).toBe("/vault/_attachments/voice/sample.txt");
+      expect(f!.absPath).toBe("/vault/_attachments/voice/sample.txt");
+      expect(typeof f!.modifiedMs).toBe("number");
+      expect(typeof f!.size).toBe("number");
+    });
+
+    test("voice_list_files 는 숨김 캐시 파일을 샘플 목록에서 제외한다", async () => {
+      const { adapter } = makePlugin();
+      adapter.__setDir("_attachments/voice");
+      adapter.__setFile("_attachments/voice/sample.md", "내 문체 학습 자료");
+      adapter.__setFile("_attachments/voice/.style-guide.json", "{}");
+
+      const list = await invoke<{ name: string }[]>("voice_list_files");
+      expect(list.map((e) => e.name).sort()).toEqual(["sample.md"]);
     });
   });
 
